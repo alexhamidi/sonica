@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import uuid
 from collections.abc import Callable, Generator
 from contextlib import asynccontextmanager
 from typing import Any

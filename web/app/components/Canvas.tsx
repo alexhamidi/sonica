@@ -420,7 +420,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
               <div
                 key={track.index}
                 style={{
-                  opacity: dimmed ? 0.07 : 1,
+                  opacity: dimmed ? 0.2 : 1,
                   transition: "opacity 0.15s ease",
                 }}
               >

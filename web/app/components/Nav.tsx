@@ -15,7 +15,7 @@ export function Nav() {
   const session = authClient.useSession();
 
   return (
-    <div className="flex w-full max-w-[min(100vw-1.5rem,48rem)] items-center justify-between gap-4">
+    <div className="flex w-full items-center justify-between gap-4">
       <div className="flex items-center gap-3">
         {links.map(({ label, href }) => {
           const active = pathname === href || pathname.startsWith(href + "/");
@@ -56,7 +56,7 @@ export function Nav() {
             })
           }
         >
-          log in with Google
+          login
         </button>
       ) : null}
     </div>

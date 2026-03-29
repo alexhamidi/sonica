@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { LandingSearchDemo } from "./components/LandingSearchDemo";
 import { Nav } from "./components/Nav";
 import { authClient } from "@/lib/auth/client";
 import { formatAddPeople } from "@/lib/format-add-people";
@@ -165,11 +166,6 @@ function isProfileUrl(s: string): boolean {
 export default function Home() {
   const router = useRouter();
   const session = authClient.useSession();
-
-  useEffect(() => {
-    if (session.isPending) return;
-    if (session.data?.user) router.replace("/canvas");
-  }, [session.isPending, session.data?.user, router]);
 
   const [mode, setMode] = useState<HomeMode>("quickstart");
   const [search, setSearch] = useState("");
@@ -424,7 +420,11 @@ export default function Home() {
   };
 
   const handleSubmit = async () => {
-    if (selected.size === 0) return;
+    if (selected.size === 0) {
+      setError("");
+      router.push("/canvas");
+      return;
+    }
     setSubmitting(true);
     setError("");
     try {
@@ -456,12 +456,13 @@ export default function Home() {
   const listLoading = mode !== "quickstart" && artistsLoading;
 
   const canSubmit =
-    selected.size > 0 && !submitting && !profileWaiting && !listLoading;
+    !submitting && !profileWaiting && !listLoading;
 
   const addButtonLabel = useMemo(() => {
     if (submitting) return "adding...";
     if (profileWaiting) return "loading...";
-    if (selected.size === 0) return "";
+    if (listLoading && selected.size === 0) return "loading...";
+    if (selected.size === 0) return "continue (no artists)";
     if (mode === "quickstart" && resolvedData) {
       return `add ${resolvedData.name}'s picks`;
     }
@@ -470,9 +471,9 @@ export default function Home() {
       .filter((n): n is string => Boolean(n && n.trim()));
     if (names.length === 0) return `Add ${selected.size} artists`;
     return formatAddPeople(names);
-  }, [submitting, profileWaiting, selected, artists, mode, resolvedData]);
+  }, [submitting, profileWaiting, listLoading, selected, artists, mode, resolvedData]);
 
-  if (session.isPending || session.data?.user) {
+  if (session.isPending) {
     return null;
   }
 
@@ -526,22 +527,22 @@ export default function Home() {
       >
         <div className="flex flex-col gap-3 text-[13px] leading-[1.5] text-white/75 select-none">
           <p>
-            on march 10, google released the{" "}
+            google recently released {" "}
             <a
               href="https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-embedding-2/"
               target="_blank"
               rel="noopener noreferrer"
               className="text-white/80 underline underline-offset-2 decoration-white/50 hover:text-white"
             >
-              first ever embedding model
+              a model
             </a>{" "}
-            capable of bringing audio, video, text, and images into a shared
-            embedding space.
+            capable of embedding audio, video, text, and images.
           </p>
           <p>
-            mus enables search across a library of more than 100k songs in this
-            shared space, so you can do things like:
+            sonica allows you to visualize and search across a library of more than 100k songs in this embedding
+            space, so you can do things like:
           </p>
+          <LandingSearchDemo />
           <p>start by choosing up to 5 artists to populate your canvas</p>
           <p>
             <button

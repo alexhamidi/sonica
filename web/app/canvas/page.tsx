@@ -50,6 +50,20 @@ const EMPTY_GPS: CanvasGrandparent[] = [];
 const SEARCH_CANVAS_POLL_MS = 400;
 const SEARCH_CANVAS_MAX_WAIT_MS = 90_000;
 
+/** Black circle × centered on the card’s top-right corner (half outside). */
+function DockedPlayerCloseButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Close player"
+      className="pointer-events-auto absolute top-0 right-0 z-20 flex h-6 w-6 translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black text-white shadow-[0_2px_10px_rgba(0,0,0,0.55)] outline-none ring-1 ring-white/20 transition-colors duration-150 hover:bg-zinc-800 focus-visible:ring-2 focus-visible:ring-white/40"
+    >
+      <X size={11} strokeWidth={2.25} className="text-white" aria-hidden />
+    </button>
+  );
+}
+
 /** Search tour steps: result tracks only (not the query/sentinel tile). */
 function buildSearchTourIndices(
   rows: CanvasTrack[],
@@ -146,6 +160,10 @@ export default function CanvasPage() {
     searchTourFromEntityRef.current = null;
     setSearchTour(null);
   }, []);
+  const dismissPlayer = useCallback(() => {
+    endSearchTour();
+    setCurrentTrack(null);
+  }, [endSearchTour]);
   const [projection, setProjection] = useState("umap");
   const [coverMode, setCoverMode] = useState<CoverMode>("album");
   const gridSize = 8000;
@@ -694,7 +712,7 @@ export default function CanvasPage() {
     );
   }, [findOpen, findQuery, visibleTracks]);
 
-  /** Same dimming as cmd+f: Canvas dims tiles not in this set (opacity 0.07). */
+  /** Same dimming as cmd+f: Canvas dims tiles not in this set (opacity 0.2). */
   const canvasHighlightIndices = useMemo(() => {
     const next = new Set<number>();
     for (const i of findMatchIndices) next.add(i);
@@ -1163,7 +1181,7 @@ export default function CanvasPage() {
                                             ? 0.5
                                             : on
                                               ? 1
-                                              : 0.4,
+                                              : 0.58,
                                         }}
                                       >
                                         <div className="relative flex-shrink-0 w-8 h-8 rounded-md overflow-hidden bg-zinc-800">
@@ -1372,7 +1390,7 @@ export default function CanvasPage() {
               onClick={() => void submitRecommended()}
               title="Mean embedding from tracks visible on the canvas (checked albums)."
               aria-label="get recommendations based on selected tracks"
-              className="relative flex w-full items-center justify-center gap-2 rounded-[10px] border px-3 py-3 text-[11px] font-medium leading-tight transition-[color,border-color,background,opacity,box-shadow] duration-200 active:scale-[0.98] disabled:opacity-50"
+              className="relative flex w-full items-center justify-center gap-0.5 rounded-[10px] border px-4 py-3 text-sm font-medium leading-none transition-[color,border-color,background,opacity,box-shadow] duration-200 active:scale-[0.98] disabled:opacity-50"
               style={{
                 borderColor: "rgba(167, 139, 250, 0.45)",
                 background:
@@ -1405,7 +1423,7 @@ export default function CanvasPage() {
                 viewBox="0 0 24 24"
                 strokeWidth={1.5}
                 stroke="currentColor"
-                className="size-4 shrink-0"
+                className="size-[15px] shrink-0 -translate-y-px"
                 aria-hidden
               >
                 <path
@@ -1417,9 +1435,7 @@ export default function CanvasPage() {
               {omniLoading ? (
                 <span>generating…</span>
               ) : (
-                <span className="min-w-0 flex-1 text-center">
-                  get recommendations based on selected tracks
-                </span>
+                <span>get recommendations</span>
               )}
             </button>
           </div>
@@ -1450,7 +1466,7 @@ export default function CanvasPage() {
                 {searchTour && tourTrack ? (
                   <>
                     <div
-                      className="grid h-7 grid-cols-[1fr_auto_1fr] items-center gap-1 px-1.5"
+                      className="relative grid h-7 grid-cols-[1fr_auto_1fr] items-center gap-1 px-1.5"
                       style={{
                         background: "rgb(14,14,18)",
                         border: "1px solid #000",
@@ -1459,6 +1475,7 @@ export default function CanvasPage() {
                         fontFamily: "var(--font-nunito)",
                       }}
                     >
+                      <DockedPlayerCloseButton onClick={dismissPlayer} />
                       <span aria-hidden className="min-w-0" />
                       <div className="flex items-center justify-center gap-1">
                         <button
@@ -1518,7 +1535,7 @@ export default function CanvasPage() {
                   </>
                 ) : (
                   <div
-                    className="px-4 pt-3 pb-3"
+                    className="relative px-4 pt-3 pb-3"
                     style={{
                       background: "rgb(14,14,18)",
                       border: "1px solid rgba(255,255,255,0.08)",
@@ -1526,6 +1543,7 @@ export default function CanvasPage() {
                       borderRadius: "16px 16px 0 0",
                     }}
                   >
+                    <DockedPlayerCloseButton onClick={dismissPlayer} />
                     <Player
                       track={currentTrack}
                       embedded

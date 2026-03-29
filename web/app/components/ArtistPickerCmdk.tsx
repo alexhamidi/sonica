@@ -4,7 +4,6 @@ import Image from "next/image";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "motion/react";
 import { formatAddPeople } from "@/lib/format-add-people";
 import { publicMusApiUrl } from "@/lib/mus/public";
 import { queryKeys } from "@/lib/query/keys";
@@ -199,39 +198,32 @@ export function ArtistPickerCmdk({
     return formatAddPeople(names);
   }, [submitting, selected, artists]);
 
-  const fadeMs = 0.14;
+  if (!open) return null;
 
   return (
-    <AnimatePresence>
-      {open ? (
-        <motion.div
-          key="artist-picker"
-          className="fixed inset-0 z-[100] flex items-center justify-center p-6"
-          role="presentation"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: fadeMs, ease: "easeOut" }}
-        >
-          <div
-            aria-hidden
-            className="absolute inset-0"
-            style={{
-              backgroundColor: "rgba(0, 0, 0, 0.72)",
-              backdropFilter: "blur(12px)",
-              WebkitBackdropFilter: "blur(12px)",
-            }}
-            onMouseDown={() => onOpenChange(false)}
-          />
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-6"
+      role="presentation"
+    >
+      <div
+        aria-hidden
+        className="absolute inset-0"
+        style={{
+          backgroundColor: "rgba(0, 0, 0, 0.68)",
+          backdropFilter: "blur(6px)",
+          WebkitBackdropFilter: "blur(6px)",
+        }}
+        onMouseDown={() => onOpenChange(false)}
+      />
 
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Search artists to add"
-            className="relative z-[1] flex w-full max-w-sm flex-col gap-5 rounded-2xl border border-white/[0.08] p-5 outline-none shadow-[0_24px_64px_rgba(0,0,0,0.55)]"
-            style={{ backgroundColor: "rgb(10, 10, 12)" }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search artists to add"
+        className="relative z-[1] flex w-full max-w-sm flex-col gap-5 rounded-2xl border border-white/[0.08] p-5 outline-none shadow-[0_24px_64px_rgba(0,0,0,0.55)]"
+        style={{ backgroundColor: "rgb(10, 10, 12)" }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
             <input
               ref={inputRef}
               value={search}
@@ -367,9 +359,7 @@ export function ArtistPickerCmdk({
             >
               {addButtonLabel || "Select artists"}
             </button>
-          </div>
-        </motion.div>
-      ) : null}
-    </AnimatePresence>
+      </div>
+    </div>
   );
 }

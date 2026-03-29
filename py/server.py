@@ -590,6 +590,43 @@ TRACK_REC_POOL = 10
 TRACK_REC_K = 5
 
 
+def _parse_parent_ids_csv(raw: str | None) -> list[str]:
+    """Comma-separated parent UUIDs from the client; invalid tokens skipped."""
+    if not raw or not str(raw).strip():
+        return []
+    out: list[str] = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(str(uuid.UUID(part)))
+        except ValueError:
+            continue
+    return out
+
+
+def _authorized_visible_parent_ids(
+    cur: Any, user_id: str, requested_parent_ids: list[str]
+) -> list[str]:
+    """Parents the user owns, are ready, canvas-visible, and in the requested set."""
+    if not requested_parent_ids:
+        return []
+    cur.execute(
+        """
+        SELECT p.id::text
+        FROM user_parents up
+        JOIN parents p ON p.id = up.parent_id AND p.status = 'ready'
+        WHERE up.user_id = %s
+          AND up.canvas_visible = true
+          AND p.id = ANY(%s::uuid[])
+        ORDER BY p.id
+        """,
+        (user_id, requested_parent_ids),
+    )
+    return [str(r["id"]) for r in cur.fetchall()]
+
+
 def _popularity_pick_tracks_not_in_library(cur: Any, user_id: str, k: int) -> list[str]:
     cur.execute(
         """

@@ -118,6 +118,18 @@ export default function CanvasPage() {
     () => canvasData?.entities ?? EMPTY_ENTITIES,
     [canvasData],
   );
+  const checkedParentIdsCsv = useMemo(
+    () =>
+      entities
+        .filter((e) => e.canvasVisible)
+        .map((e) => e.id)
+        .join(","),
+    [entities],
+  );
+  const hasCheckedAlbum = useMemo(
+    () => entities.some((e) => e.canvasVisible),
+    [entities],
+  );
   const grandparents = useMemo(
     () => canvasData?.grandparents ?? EMPTY_GPS,
     [canvasData],
@@ -353,22 +365,26 @@ export default function CanvasPage() {
 
   const submitRecommended = useCallback(async () => {
     const userId = session.data?.user?.id;
-    if (!userId) return;
+    if (!userId || !checkedParentIdsCsv) return;
     endSearchTour();
     setCurrentTrack(null);
     setOmniLoading(true);
     try {
       const form = new FormData();
       form.append("user_id", userId);
+      form.append("parent_ids", checkedParentIdsCsv);
       const res = await fetch(`${publicMusApiUrl()}/api/search/recommended`, {
         method: "POST",
         body: form,
       });
       if (!res.ok) {
-        const detail =
-          res.status === 404
-            ? "Nothing to suggest yet — try adding more music first."
-            : res.statusText || `HTTP ${res.status}`;
+        let detail = res.statusText || `HTTP ${res.status}`;
+        try {
+          const j = (await res.json()) as { detail?: unknown };
+          if (typeof j.detail === "string") detail = j.detail;
+        } catch {
+          /* keep detail */
+        }
         toast.error("Recommendations failed", { description: detail });
         return;
       }
@@ -387,7 +403,12 @@ export default function CanvasPage() {
     } finally {
       setOmniLoading(false);
     }
-  }, [applySearchTourAfterFetch, endSearchTour, session.data?.user?.id]);
+  }, [
+    applySearchTourAfterFetch,
+    checkedParentIdsCsv,
+    endSearchTour,
+    session.data?.user?.id,
+  ]);
 
   useLayoutEffect(() => {
     if (session.isPending) return;
@@ -1347,9 +1368,11 @@ export default function CanvasPage() {
             </button>
             <button
               type="button"
-              disabled={!sessionUserId || omniLoading}
+              disabled={!sessionUserId || omniLoading || !hasCheckedAlbum}
               onClick={() => void submitRecommended()}
-              className="relative flex w-full items-center justify-center gap-2 rounded-[10px] border px-4 py-3 text-sm font-medium leading-none transition-[color,border-color,background,opacity,box-shadow] duration-200 active:scale-[0.98] disabled:opacity-50"
+              title="Mean embedding from tracks visible on the canvas (checked albums)."
+              aria-label="get recommendations based on selected tracks"
+              className="relative flex w-full items-center justify-center gap-2 rounded-[10px] border px-3 py-3 text-[11px] font-medium leading-tight transition-[color,border-color,background,opacity,box-shadow] duration-200 active:scale-[0.98] disabled:opacity-50"
               style={{
                 borderColor: "rgba(167, 139, 250, 0.45)",
                 background:
@@ -1391,7 +1414,13 @@ export default function CanvasPage() {
                   d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z"
                 />
               </svg>
-              {omniLoading ? "generating…" : "get recommendations"}
+              {omniLoading ? (
+                <span>generating…</span>
+              ) : (
+                <span className="min-w-0 flex-1 text-center">
+                  get recommendations based on selected tracks
+                </span>
+              )}
             </button>
           </div>
         </div>

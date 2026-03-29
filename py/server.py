@@ -783,25 +783,30 @@ def _worker_similar_by_track(
 def _worker_recommended_tracks_for_user(
     postgres_url: str,
     user_id: str,
+    requested_parent_ids: list[str],
 ) -> tuple[list[str], list[float], str]:
     """
-    Mean embedding over the user's on-canvas library tracks, then the nearest
-    TRACK_REC_POOL catalog tracks **not** already in the library, then top
-    TRACK_REC_K by artist monthly_listeners (same composite idea as /api/artists/suggested).
+    Mean embedding over tracks under **checked (canvas_visible) parents** in
+    ``requested_parent_ids`` that belong to the user, then nearest-neighbor +
+    popularity pick (same composite as /api/artists/suggested).
 
-    Exclusion: tracks linked to this user via ``user_parents`` and a **ready**
-    parent (same rule as canvas / similar search).
+    Exclusion for result tracks: not already in the user's library (ready parent
+    + user_parents).
 
-    Falls back to pure popularity (tracks not in library) when the user has no
-    embeddable tracks or when embedding dimensions disagree.
+    If there are no embeddable tracks under those parents, returns empty ids
+    (no global-library mean fallback).
     """
     label = "Recommendations"
     c, release = _conn_from_pool_or_url(postgres_url)
     try:
         cur = c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        parent_ids = _authorized_visible_parent_ids(cur, user_id, requested_parent_ids)
+        if not parent_ids:
+            return [], [], ""
+
         cur.execute(
             """
-            SELECT t.embedding::text AS emb_text
+            SELECT DISTINCT ON (t.id) t.embedding::text AS emb_text
             FROM tracks t
             INNER JOIN parent_tracks pt ON pt.track_id = t.id
             INNER JOIN parents p ON p.id = pt.parent_id AND p.status = 'ready'
@@ -809,8 +814,10 @@ def _worker_recommended_tracks_for_user(
             WHERE t.embedding IS NOT NULL
               AND t.status = 'ready'
               AND (t.is_query = false OR t.is_query IS NULL)
+              AND p.id = ANY(%s::uuid[])
+            ORDER BY t.id
             """,
-            (user_id,),
+            (user_id, parent_ids),
         )
         vectors: list[list[float]] = []
         for row in cur.fetchall():
@@ -881,15 +888,9 @@ def _worker_recommended_tracks_for_user(
             )
             if ids_fb:
                 return ids_fb, mean, label
-            return [], [], ""
+            return [], mean, label
 
-        ids = _popularity_pick_tracks_not_in_library(cur, user_id, TRACK_REC_K)
-        if not ids:
-            return [], [], ""
-        emb = _track_embedding_from_id(cur, ids[0])
-        if len(emb) < 2:
-            return [], [], ""
-        return ids, emb, label
+        return [], [], ""
     finally:
         release()
 
@@ -1091,21 +1092,36 @@ def api_search_similar(
 def api_search_recommended(
     background_tasks: BackgroundTasks,
     user_id: str = FastAPIForm(...),
+    parent_ids: str | None = FastAPIForm(
+        default=None,
+        description="Comma-separated parent (album) UUIDs for checked, visible albums",
+    ),
     conn=Depends(get_db),
 ):
     """
-    Personalized track recommendations: mean embedding of the user's library tracks,
-    nearest TRACK_REC_POOL tracks not already in the library, then top TRACK_REC_K
-    by artist monthly_listeners. Creates a search parent (query_kind=recommended).
+    Recommendations from the mean embedding of tracks under those parents only
+    (must be the user's canvas-visible / checked albums). Result tracks are still
+    catalog-wide excluding the full library.
     """
     uid = (user_id or "").strip()
     if not uid:
         raise HTTPException(status_code=400, detail="user_id is required")
 
+    parsed_parents = _parse_parent_ids_csv(parent_ids)
+    if not parsed_parents:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "parent_ids is required: comma-separated parent ids for checked "
+                "albums (visible on the canvas)."
+            ),
+        )
+
     try:
         track_ids, query_emb, label = _worker_recommended_tracks_for_user(
             settings.postgres_url,
             uid,
+            parsed_parents,
         )
     except Exception as e:
         raise HTTPException(
@@ -1113,18 +1129,19 @@ def api_search_recommended(
             detail=f"Recommended search failed: {e}",
         ) from e
 
-    if not label:
+    if not query_emb or len(query_emb) < 2:
         raise HTTPException(
             status_code=404,
-            detail="No recommendations found (empty catalog or library)",
+            detail=(
+                "No embeddable tracks in the checked albums, or those albums are "
+                "not visible for your account."
+            ),
         )
     if not track_ids:
         raise HTTPException(
             status_code=404,
             detail="No recommended tracks found outside your library",
         )
-    if len(query_emb) < 2:
-        raise HTTPException(status_code=500, detail="Could not build query embedding")
 
     return _commit_semantic_search_parent(
         conn,

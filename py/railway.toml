@@ -2,4 +2,4 @@
 buildCommand = "pip install -r requirements.txt"
 
 [deploy]
-startCommand = "sh -c 'uvicorn server:app --host 0.0.0.0 --port $PORT'"
+startCommand = "uvicorn server:app --host 0.0.0.0 --port 8080"

@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import re
 import uuid
 from collections.abc import Callable, Generator
 from contextlib import asynccontextmanager
 from typing import Any
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import psycopg2
 import psycopg2.extras
@@ -40,10 +45,7 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-S3_BASE = (
-    settings.cdn_base
-    or f"https://{settings.s3_bucket}.s3.{settings.aws_default_region}.amazonaws.com"
-)
+S3_BASE = settings.cdn_base or f"https://{settings.s3_bucket}.s3.{settings.aws_default_region}.amazonaws.com"
 
 _db_pool: pg_pool.ThreadedConnectionPool | None = None
 
@@ -390,10 +392,7 @@ def api_artists_suggested(
             "personalized": False,
         }
 
-    mean = [
-        sum(vectors[i][j] for i in range(len(vectors))) / len(vectors)
-        for j in range(dim)
-    ]
+    mean = [sum(vectors[i][j] for i in range(len(vectors))) / len(vectors) for j in range(dim)]
     mean = _l2_normalize(mean)
     emb_str = "[" + ",".join(f"{v:.8g}" for v in mean) + "]"
 
@@ -481,16 +480,12 @@ def api_resolve(url: str = "", conn=Depends(get_db)):
         )
 
     try:
-        display_name, rows = top_catalog_artists_for_profile_url(
-            raw, limit=10, postgres_url=settings.postgres_url
-        )
+        display_name, rows = top_catalog_artists_for_profile_url(raw, limit=10, postgres_url=settings.postgres_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         log.exception("resolve profile failed")
-        raise HTTPException(
-            status_code=502, detail="Could not read that Spotify profile"
-        ) from e
+        raise HTTPException(status_code=502, detail="Could not read that Spotify profile") from e
 
     if not rows:
         return {
@@ -606,9 +601,7 @@ def _parse_parent_ids_csv(raw: str | None) -> list[str]:
     return out
 
 
-def _authorized_visible_parent_ids(
-    cur: Any, user_id: str, requested_parent_ids: list[str]
-) -> list[str]:
+def _authorized_visible_parent_ids(cur: Any, user_id: str, requested_parent_ids: list[str]) -> list[str]:
     """Parents the user owns, are ready, canvas-visible, and in the requested set."""
     if not requested_parent_ids:
         return []
@@ -748,9 +741,7 @@ def _worker_similar_by_track(
 
         nums = _parse_halfvec_text(row.get("emb_text"))
         if not nums:
-            raise RuntimeError(
-                "Could not parse track embedding (unexpected text format)"
-            )
+            raise RuntimeError("Could not parse track embedding (unexpected text format)")
 
         title = (row.get("title") or "").strip() or "Track"
         artist = (row.get("artist") or "").strip()
@@ -830,16 +821,10 @@ def _worker_recommended_tracks_for_user(
             dim = len(vectors[0])
             if all(len(v) == dim for v in vectors):
                 mean = _l2_normalize(
-                    [
-                        sum(vectors[i][j] for i in range(len(vectors)))
-                        / len(vectors)
-                        for j in range(dim)
-                    ]
+                    [sum(vectors[i][j] for i in range(len(vectors))) / len(vectors) for j in range(dim)]
                 )
             else:
-                log.warning(
-                    "search/recommended: mismatched embedding dimensions; using popularity fallback"
-                )
+                log.warning("search/recommended: mismatched embedding dimensions; using popularity fallback")
                 vectors = []
 
         if mean:
@@ -883,9 +868,7 @@ def _worker_recommended_tracks_for_user(
             ids = [str(r["id"]) for r in cur.fetchall()]
             if ids:
                 return ids, mean, label
-            ids_fb = _popularity_pick_tracks_not_in_library(
-                cur, user_id, TRACK_REC_K
-            )
+            ids_fb = _popularity_pick_tracks_not_in_library(cur, user_id, TRACK_REC_K)
             if ids_fb:
                 return ids_fb, mean, label
             return [], mean, label
@@ -1009,9 +992,7 @@ def api_search(
 
     file_bytes = file.file.read() if file else None
     mime_type = (file.content_type or "application/octet-stream") if file else ""
-    label = (text.strip()[:80] if text else None) or (
-        file.filename if file else "search"
-    )
+    label = (text.strip()[:80] if text else None) or (file.filename if file else "search")
     try:
         track_ids, query_emb = _worker_embed_search_track_ids(
             settings.postgres_url,
@@ -1111,10 +1092,7 @@ def api_search_recommended(
     if not parsed_parents:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "parent_ids is required: comma-separated parent ids for checked "
-                "albums (visible on the canvas)."
-            ),
+            detail=("parent_ids is required: comma-separated parent ids for checked albums (visible on the canvas)."),
         )
 
     try:
@@ -1132,10 +1110,7 @@ def api_search_recommended(
     if not query_emb or len(query_emb) < 2:
         raise HTTPException(
             status_code=404,
-            detail=(
-                "No embeddable tracks in the checked albums, or those albums are "
-                "not visible for your account."
-            ),
+            detail=("No embeddable tracks in the checked albums, or those albums are not visible for your account."),
         )
     if not track_ids:
         raise HTTPException(
@@ -1173,5 +1148,7 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# Should be this:
+port = int(os.environ.get("PORT", 8002))
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8002)
+    uvicorn.run(app, host="0.0.0.0", port=port)

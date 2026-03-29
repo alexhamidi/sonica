@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Nunito } from "next/font/google";
+import { QueryProvider } from "@/lib/query/provider";
+import { AppToaster } from "./components/AppToaster";
 import "./globals.css";
 
 const nunito = Nunito({
@@ -9,8 +11,8 @@ const nunito = Nunito({
 });
 
 export const metadata: Metadata = {
-  title: "mus",
-  description: "Spotify playlist player",
+  title: "sonica - song embedding visualizer",
+  description: "Music Visualizer with Embeddings Spotify player",
 };
 
 export default function RootLayout({
@@ -20,7 +22,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${nunito.variable} h-full antialiased`}>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <QueryProvider>{children}</QueryProvider>
+        <AppToaster />
+      </body>
     </html>
   );
 }

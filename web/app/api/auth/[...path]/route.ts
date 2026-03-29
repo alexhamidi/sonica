@@ -1,8 +1,6 @@
 import { auth } from "@/lib/auth/server";
-import { neon } from "@neondatabase/serverless";
+import { sql } from "@/lib/server/db";
 import { NextRequest } from "next/server";
-
-const sql = neon(process.env.POSTGRES_URL!);
 
 const SEARCHES_ID = "00000000-0000-0000-0000-000000000001";
 const ORPHANS_ID = "00000000-0000-0000-0000-000000000002";
@@ -20,7 +18,9 @@ async function provisionUser(userId: string) {
 const { GET, POST: authPOST } = auth.handler();
 export { GET };
 
-export async function POST(req: NextRequest, ctx: unknown) {
+type AuthPostContext = Parameters<typeof authPOST>[1];
+
+export async function POST(req: NextRequest, ctx: AuthPostContext) {
   const url = new URL(req.url);
   const res = await authPOST(req, ctx);
 

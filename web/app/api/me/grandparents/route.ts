@@ -1,8 +1,6 @@
 import { auth } from "@/lib/auth/server";
-import { neon } from "@neondatabase/serverless";
+import { sql } from "@/lib/server/db";
 import { NextResponse } from "next/server";
-
-const sql = neon(process.env.POSTGRES_URL!);
 export const dynamic = "force-dynamic";
 const SENTINEL_GRANDPARENT_TYPES = new Set(["orphans", "searches"]);
 

@@ -2,11 +2,10 @@
 
 import { useLayoutEffect, useRef, useState } from "react";
 
-export type CoverMode = "playlist" | "album" | "artist" | "hide";
+export type CoverMode = "album" | "artist" | "hide";
 
-const COVER_MODES: CoverMode[] = ["playlist", "album", "artist", "hide"];
+const COVER_MODES: CoverMode[] = ["album", "artist", "hide"];
 const COVER_LABELS: Record<CoverMode, string> = {
-  playlist: "playlist",
   album: "album",
   artist: "artist",
   hide: "hide",
@@ -66,7 +65,7 @@ function SlidingSwitcher<T extends string>({
             transition: "color 0.18s ease",
           }}
         >
-          {(COVER_LABELS as any)[opt] || opt}
+          {COVER_LABELS[opt as CoverMode] ?? opt}
         </button>
       ))}
     </div>

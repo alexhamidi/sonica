@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+} from "react";
 import { TrackTile, Track } from "./TrackTile";
 import { CoverMode } from "./CanvasControls";
 
@@ -8,36 +14,73 @@ const TILE = 176;
 const MIN_Z = 0.06;
 const MAX_Z = 5;
 const DRAG_THRESHOLD = 8;
+const INTERACTION_END_MS = 300;
+const WHEEL_IDLE_MS = 150;
+
+export type CanvasHandle = {
+  focusTrack: (trackIndex: number, projection: string, zoom?: number) => void;
+  /** Pan to center the track at the current zoom (no zoom change) — for tour navigation. */
+  focusTrackTour: (
+    trackIndex: number,
+    projection: string,
+    zoom?: number,
+  ) => void;
+};
 
 interface CanvasProps {
   tracks: Track[];
   currentTrack: Track | null;
   onTrackClick: (track: Track) => void;
-  playlistCovers: (string | null)[];
-  playlistOnlyCovers: (string | null)[];
+  /** Per-source images for artist cover mode (aligned with track.sourceIndex). */
   artistCovers: (string | null)[];
   gridSize: number;
   coverMode: CoverMode;
   projection: string;
+  /** When set, tiles not in this set are dimmed. */
+  highlightIndices?: Set<number>;
 }
 
-export function Canvas({
-  tracks,
-  currentTrack,
-  onTrackClick,
-  playlistCovers,
-  playlistOnlyCovers,
-  artistCovers,
-  gridSize,
-  coverMode,
-  projection,
-}: CanvasProps) {
+function preloadThenAssignCover(img: HTMLImageElement, url: string) {
+  if (!url || img.dataset.loadedSrc === url) return;
+  const pre = new Image();
+  const commit = () => {
+    img.src = url;
+    img.dataset.loadedSrc = url;
+    img.style.opacity = "1";
+  };
+  pre.onload = commit;
+  pre.onerror = commit;
+  pre.src = url;
+  if (pre.complete && pre.naturalWidth > 0) commit();
+}
+
+function isSearchSourcedTrack(track: Track): boolean {
+  return track.sourceQueryKind != null && track.sourceQueryKind !== "";
+}
+
+function skipCanvasTile(track: Track): boolean {
+  return (
+    Boolean(track.isQuery) && track.sourceQueryKind === "recommended"
+  );
+}
+
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
+  {
+    tracks,
+    currentTrack,
+    onTrackClick,
+    artistCovers,
+    gridSize,
+    coverMode,
+    projection,
+    highlightIndices,
+  },
+  ref,
+) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
-  const bgRef = useRef<HTMLCanvasElement>(null);
   const tracksRef = useRef(tracks);
   tracksRef.current = tracks;
-  const vpSize = useRef({ w: 0, h: 0 });
   const camRef = useRef({ x: 0, y: 0, z: 0.4 });
   const dragRef = useRef<{
     sx: number;
@@ -47,6 +90,7 @@ export function Canvas({
     panned: boolean;
   } | null>(null);
 
+  const animRef = useRef<number | null>(null);
   const cameraInitRef = useRef(false);
   const imgMapRef = useRef<Map<number, HTMLImageElement>>(new Map());
   const imgCallbacksRef = useRef<
@@ -55,22 +99,22 @@ export function Canvas({
   const trackLookupRef = useRef<Map<number, Track>>(new Map());
   const coverModeRef = useRef(coverMode);
   coverModeRef.current = coverMode;
-  const playlistCoversRef = useRef(playlistCovers);
-  playlistCoversRef.current = playlistCovers;
-  const playlistOnlyCoversRef = useRef(playlistOnlyCovers);
-  playlistOnlyCoversRef.current = playlistOnlyCovers;
   const artistCoversRef = useRef(artistCovers);
   artistCoversRef.current = artistCovers;
+  const willChangeClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getCoverUrl = useCallback((track: Track) => {
-    if (coverModeRef.current === "playlist") {
-      return playlistOnlyCoversRef.current[track.playlistIndex] || "";
-    }
     if (coverModeRef.current === "album") {
       return track.cover || "";
     }
     if (coverModeRef.current === "artist") {
-      return artistCoversRef.current[track.playlistIndex] || "";
+      if (isSearchSourcedTrack(track)) {
+        return track.artistCover || track.cover || "";
+      }
+      return artistCoversRef.current[track.sourceIndex] || "";
     }
     return "";
   }, []);
@@ -81,22 +125,15 @@ export function Canvas({
     trackLookupRef.current = map;
   }, [tracks]);
 
-  // Eager-load all covers; re-run when cover source changes
+  // Eager-load covers; preload then swap so toggling cover mode does not zero opacity on all tiles.
   useEffect(() => {
     imgMapRef.current.forEach((img, idx) => {
       const track = trackLookupRef.current.get(idx);
       if (!track) return;
       const url = getCoverUrl(track);
-      if (!url || img.dataset.loadedSrc === url) return;
-      img.dataset.loadedSrc = url;
-      img.src = url;
-      img.style.opacity = "0";
-      img.onload = () => {
-        img.style.opacity = "1";
-      };
-      if (img.complete && img.naturalWidth > 0) img.style.opacity = "1";
+      preloadThenAssignCover(img, url);
     });
-  }, [tracks, coverMode, playlistCovers, playlistOnlyCovers, artistCovers, getCoverUrl]);
+  }, [tracks, coverMode, artistCovers, getCoverUrl]);
 
   const registerImg = useCallback((idx: number) => {
     if (!imgCallbacksRef.current.has(idx)) {
@@ -106,14 +143,7 @@ export function Canvas({
           const track = trackLookupRef.current.get(idx);
           if (track) {
             const url = getCoverUrl(track);
-            if (url) {
-              el.dataset.loadedSrc = url;
-              el.src = url;
-              el.onload = () => {
-                el.style.opacity = "1";
-              };
-              if (el.complete && el.naturalWidth > 0) el.style.opacity = "1";
-            }
+            if (url) preloadThenAssignCover(el, url);
           }
         } else {
           imgMapRef.current.delete(idx);
@@ -123,54 +153,117 @@ export function Canvas({
     return imgCallbacksRef.current.get(idx)!;
   }, []);
 
-  const drawDots = useCallback((c: { x: number; y: number; z: number }) => {
-    const canvas = bgRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.width / dpr;
-    const h = canvas.height / dpr;
-    const spacing = 120 * c.z;
-    ctx.clearRect(0, 0, w, h);
-    if (spacing < 5) return;
-    const r = Math.min(2.5, Math.max(0.8, c.z * 1.8));
-    const ox = ((c.x % spacing) + spacing) % spacing;
-    const oy = ((c.y % spacing) + spacing) % spacing;
-    ctx.fillStyle = "rgba(255,255,255,0.25)";
-    ctx.beginPath();
-    for (let x = ox - spacing; x < w + spacing; x += spacing)
-      for (let y = oy - spacing; y < h + spacing; y += spacing) {
-        ctx.moveTo(x + r, y);
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-      }
-    ctx.fill();
+  const bumpWillChange = useCallback(() => {
+    if (willChangeClearTimerRef.current) {
+      clearTimeout(willChangeClearTimerRef.current);
+      willChangeClearTimerRef.current = null;
+    }
+    if (innerRef.current) innerRef.current.style.willChange = "transform";
   }, []);
 
-  const resizeCanvas = useCallback(() => {
-    const canvas = bgRef.current;
-    const vp = viewportRef.current;
-    if (!canvas || !vp) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = vp.clientWidth;
-    const h = vp.clientHeight;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
-    const ctx = canvas.getContext("2d");
-    if (ctx) ctx.scale(dpr, dpr);
-    drawDots(camRef.current);
-  }, [drawDots]);
+  const scheduleWillChangeEnd = useCallback(() => {
+    if (willChangeClearTimerRef.current)
+      clearTimeout(willChangeClearTimerRef.current);
+    willChangeClearTimerRef.current = setTimeout(() => {
+      willChangeClearTimerRef.current = null;
+      if (innerRef.current) innerRef.current.style.willChange = "auto";
+    }, INTERACTION_END_MS);
+  }, []);
 
-  const applyCamera = useCallback(
-    (c: { x: number; y: number; z: number }) => {
-      camRef.current = c;
-      if (innerRef.current)
-        innerRef.current.style.transform = `translate(${c.x}px,${c.y}px) scale(${c.z})`;
-      drawDots(c);
+  const applyCamera = useCallback((c: { x: number; y: number; z: number }) => {
+    camRef.current = c;
+    if (innerRef.current)
+      innerRef.current.style.transform = `translate(${c.x}px,${c.y}px) scale(${c.z})`;
+  }, []);
+
+  const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+
+  const smoothCamera = useCallback(
+    (target: { x: number; y: number; z: number }, durationMs: number) => {
+      if (animRef.current !== null) cancelAnimationFrame(animRef.current);
+      bumpWillChange();
+      const start = { ...camRef.current };
+      const t0 = performance.now();
+      const step = (now: number) => {
+        const t = Math.min(1, (now - t0) / durationMs);
+        const e = easeOutCubic(t);
+        applyCamera({
+          x: start.x + (target.x - start.x) * e,
+          y: start.y + (target.y - start.y) * e,
+          z: start.z + (target.z - start.z) * e,
+        });
+        if (t < 1) animRef.current = requestAnimationFrame(step);
+        else {
+          animRef.current = null;
+          scheduleWillChangeEnd();
+        }
+      };
+      animRef.current = requestAnimationFrame(step);
     },
-    [drawDots],
+    [applyCamera, bumpWillChange, scheduleWillChangeEnd],
+  );
+
+  const targetCameraForTrack = useCallback(
+    (trackIndex: number, proj: string, zoom = 0.9) => {
+      const track = trackLookupRef.current.get(trackIndex);
+      if (!track) return null;
+      const coords = track.projections?.[proj];
+      if (!coords) return null;
+      const vp = viewportRef.current;
+      if (!vp) return null;
+      const wx = coords[0] * gridSize + TILE / 2;
+      const wy = coords[1] * gridSize + TILE / 2;
+      const z = Math.min(MAX_Z, Math.max(MIN_Z, zoom));
+      return {
+        x: vp.clientWidth / 2 - wx * z,
+        y: vp.clientHeight / 2 - wy * z,
+        z,
+      };
+    },
+    [gridSize],
+  );
+
+  const focusTrackAt = useCallback(
+    (trackIndex: number, proj: string, zoom = 0.9) => {
+      const target = targetCameraForTrack(trackIndex, proj, zoom);
+      if (!target) return;
+      smoothCamera(target, 500);
+    },
+    [targetCameraForTrack, smoothCamera],
+  );
+
+  const focusTrackTourAt = useCallback(
+    (trackIndex: number, proj: string) => {
+      const track = trackLookupRef.current.get(trackIndex);
+      if (!track) return;
+      const coords = track.projections?.[proj];
+      if (!coords) return;
+      const vp = viewportRef.current;
+      if (!vp) return;
+      const wx = coords[0] * gridSize + TILE / 2;
+      const wy = coords[1] * gridSize + TILE / 2;
+      const z = camRef.current.z;
+      const target = {
+        x: vp.clientWidth / 2 - wx * z,
+        y: vp.clientHeight / 2 - wy * z,
+        z,
+      };
+      smoothCamera(target, 500);
+    },
+    [gridSize, smoothCamera],
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      focusTrack: (trackIndex: number, proj: string, zoom?: number) => {
+        focusTrackAt(trackIndex, proj, zoom ?? 0.9);
+      },
+      focusTrackTour: (trackIndex: number, proj: string, _zoom?: number) => {
+        focusTrackTourAt(trackIndex, proj);
+      },
+    }),
+    [focusTrackAt, focusTrackTourAt],
   );
 
   useEffect(() => {
@@ -179,7 +272,6 @@ export function Canvas({
     if (!vp || tracks.length === 0) return;
     cameraInitRef.current = true;
     const { clientWidth: vw, clientHeight: vh } = vp;
-    vpSize.current = { w: vw, h: vh };
     const total = gridSize + TILE;
     const fz = Math.min(vw / total, vh / total) * 0.9;
     const z = Math.min(MAX_Z, Math.max(MIN_Z, fz));
@@ -187,22 +279,16 @@ export function Canvas({
   }, [tracks.length, gridSize, applyCamera]);
 
   useEffect(() => {
-    const vp = viewportRef.current;
-    if (!vp) return;
-    resizeCanvas();
-    const ro = new ResizeObserver(([e]) => {
-      vpSize.current = { w: e.contentRect.width, h: e.contentRect.height };
-      resizeCanvas();
-    });
-    ro.observe(vp);
-    return () => ro.disconnect();
-  }, [resizeCanvas]);
-
-  useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      bumpWillChange();
+      if (wheelIdleTimerRef.current) clearTimeout(wheelIdleTimerRef.current);
+      wheelIdleTimerRef.current = setTimeout(() => {
+        wheelIdleTimerRef.current = null;
+        scheduleWillChangeEnd();
+      }, WHEEL_IDLE_MS);
       const rect = el.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
@@ -221,27 +307,45 @@ export function Canvas({
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [applyCamera]);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      if (wheelIdleTimerRef.current) {
+        clearTimeout(wheelIdleTimerRef.current);
+        wheelIdleTimerRef.current = null;
+      }
+    };
+  }, [applyCamera, bumpWillChange, scheduleWillChangeEnd]);
 
   const setCursor = useCallback((grabbing: boolean) => {
     if (viewportRef.current)
       viewportRef.current.style.cursor = grabbing ? "grabbing" : "grab";
   }, []);
 
-  const onPointerDown = useCallback((e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    const c = camRef.current;
-    dragRef.current = {
-      sx: e.clientX,
-      sy: e.clientY,
-      ox: c.x,
-      oy: c.y,
-      panned: false,
-    };
-  }, []);
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      bumpWillChange();
+      if (wheelIdleTimerRef.current) {
+        clearTimeout(wheelIdleTimerRef.current);
+        wheelIdleTimerRef.current = null;
+      }
+      if (animRef.current !== null) {
+        cancelAnimationFrame(animRef.current);
+        animRef.current = null;
+      }
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      const c = camRef.current;
+      dragRef.current = {
+        sx: e.clientX,
+        sy: e.clientY,
+        ox: c.x,
+        oy: c.y,
+        panned: false,
+      };
+    },
+    [bumpWillChange],
+  );
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -264,6 +368,7 @@ export function Canvas({
       const d = dragRef.current;
       dragRef.current = null;
       setCursor(false);
+      scheduleWillChangeEnd();
       try {
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
       } catch {
@@ -281,7 +386,7 @@ export function Canvas({
         }
       }
     },
-    [onTrackClick],
+    [onTrackClick, projection, focusTrackAt, scheduleWillChangeEnd],
   );
 
   const total = gridSize + TILE;
@@ -296,34 +401,43 @@ export function Canvas({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
-      <canvas ref={bgRef} className="absolute inset-0 pointer-events-none" />
-      <div
-        ref={innerRef}
-        className="absolute left-0 top-0 origin-top-left will-change-transform"
-      >
+      <div ref={innerRef} className="absolute left-0 top-0 origin-top-left">
         <div className="relative" style={{ width: total, height: total }}>
           {tracks.map((track) => {
+            if (skipCanvasTile(track)) return null;
             const coords = track.projections?.[projection];
             if (!coords) return null;
+            const artistModeUrl = isSearchSourcedTrack(track)
+              ? track.artistCover || track.cover
+              : artistCovers[track.sourceIndex];
             const effectiveCoverMode =
-              coverMode === "playlist" && !playlistOnlyCovers[track.playlistIndex]
-                ? "hide"
-                : coverMode;
+              coverMode === "artist" && !artistModeUrl ? "hide" : coverMode;
+            const dimmed =
+              highlightIndices !== undefined &&
+              highlightIndices.size > 0 &&
+              !highlightIndices.has(track.index);
             return (
-              <TrackTile
+              <div
                 key={track.index}
-                track={track}
-                isPlaying={currentTrack?.index === track.index}
-                left={coords[0] * gridSize}
-                top={coords[1] * gridSize}
-                tileSize={TILE}
-                coverMode={effectiveCoverMode}
-                onImgMount={registerImg(track.index)}
-              />
+                style={{
+                  opacity: dimmed ? 0.07 : 1,
+                  transition: "opacity 0.15s ease",
+                }}
+              >
+                <TrackTile
+                  track={track}
+                  isPlaying={currentTrack?.index === track.index}
+                  left={coords[0] * gridSize}
+                  top={coords[1] * gridSize}
+                  tileSize={TILE}
+                  coverMode={effectiveCoverMode}
+                  onImgMount={registerImg(track.index)}
+                />
+              </div>
             );
           })}
         </div>
       </div>
     </div>
   );
-}
+});

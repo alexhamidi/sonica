@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import sys
 import uuid
 from collections.abc import Callable, Generator
 from contextlib import asynccontextmanager
@@ -50,13 +51,33 @@ S3_BASE = (
 _db_pool: pg_pool.ThreadedConnectionPool | None = None
 
 
+def _postgres_dsn(url: str) -> str:
+    """Append libpq TCP keepalive params to reduce idle SSL drops (e.g. Neon + App Runner)."""
+    if "keepalives=" in url.lower():
+        return url
+    sep = "&" if "?" in url else "?"
+    return (
+        f"{url}{sep}"
+        "keepalives=1&keepalives_idle=30&keepalives_interval=10&keepalives_count=5"
+    )
+
+
+def _safe_rollback(conn: psycopg2.extensions.connection) -> None:
+    if getattr(conn, "closed", 1) != 0:
+        return
+    try:
+        conn.rollback()
+    except psycopg2.Error:
+        pass
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     global _db_pool
     _db_pool = pg_pool.ThreadedConnectionPool(
         minconn=2,
         maxconn=20,
-        dsn=settings.postgres_url,
+        dsn=_postgres_dsn(settings.postgres_url),
     )
     try:
         yield
@@ -107,8 +128,23 @@ def _conn_from_pool_or_url(
     """Pooled connection when app is up; otherwise a one-off (e.g. tests)."""
     if _db_pool is not None:
         c = _db_pool.getconn()
-        return c, lambda: _db_pool.putconn(c)
-    c = psycopg2.connect(postgres_url)
+
+        def release() -> None:
+            _, exc_val, _ = sys.exc_info()
+            _safe_rollback(c)
+            broken = (c.closed != 0) or (
+                exc_val is not None
+                and isinstance(
+                    exc_val, (psycopg2.OperationalError, psycopg2.InterfaceError)
+                )
+            )
+            try:
+                _db_pool.putconn(c, close=broken)
+            except Exception:
+                pass
+
+        return c, release
+    c = psycopg2.connect(_postgres_dsn(postgres_url))
     return c, lambda: c.close()
 
 
@@ -118,14 +154,21 @@ def get_db() -> Generator[psycopg2.extensions.connection, None, None]:
         conn = _db_pool.getconn()
         try:
             yield conn
-        except Exception:
-            conn.rollback()
-            raise
         finally:
-            conn.rollback()
-            _db_pool.putconn(conn)
+            _, exc_val, _ = sys.exc_info()
+            _safe_rollback(conn)
+            broken = (conn.closed != 0) or (
+                exc_val is not None
+                and isinstance(
+                    exc_val, (psycopg2.OperationalError, psycopg2.InterfaceError)
+                )
+            )
+            try:
+                _db_pool.putconn(conn, close=broken)
+            except Exception:
+                pass
         return
-    conn = psycopg2.connect(settings.postgres_url)
+    conn = psycopg2.connect(_postgres_dsn(settings.postgres_url))
     try:
         yield conn
     finally:

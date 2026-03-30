@@ -23,6 +23,16 @@ import {
   fetchCanvasPayload,
 } from "@/lib/api/canvas-types";
 import { authClient } from "@/lib/auth/client";
+import {
+  clearExpectCanvasAfterOAuth,
+  markExpectCanvasAfterOAuth,
+  postSignInCanvasUrl,
+} from "@/lib/auth/post-sign-in-url";
+import {
+  clearPendingAddBulk,
+  peekPendingAddBulk,
+  restorePendingAddBulk,
+} from "@/lib/onboarding/pending-add-bulk";
 import { publicMusApiUrl } from "@/lib/mus/public";
 import { pastelFromId } from "@/lib/pastelFromId";
 import { useCanvasQuery } from "@/lib/query/hooks/use-canvas";
@@ -46,6 +56,9 @@ const HIDDEN_EMPTY_GRANDPARENT_TYPES = new Set(["orphans"]);
 const EMPTY_TRACKS: CanvasTrack[] = [];
 const EMPTY_ENTITIES: CanvasEntity[] = [];
 const EMPTY_GPS: CanvasGrandparent[] = [];
+
+/** Avoid duplicate add-bulk if React Strict Mode runs the effect twice. */
+let pendingAddBulkApplyInFlight = false;
 
 const SEARCH_CANVAS_POLL_MS = 400;
 const SEARCH_CANVAS_MAX_WAIT_MS = 90_000;
@@ -431,12 +444,58 @@ export default function CanvasPage() {
   useLayoutEffect(() => {
     if (session.isPending) return;
     if (!session.data?.user) {
+      markExpectCanvasAfterOAuth();
       void authClient.signIn.social({
         provider: "google",
-        callbackURL: "/canvas",
+        callbackURL: postSignInCanvasUrl(),
       });
     }
   }, [session.isPending, session.data?.user]);
+
+  useEffect(() => {
+    clearExpectCanvasAfterOAuth();
+  }, []);
+
+  useEffect(() => {
+    if (session.isPending || !sessionUserId) return;
+    if (pendingAddBulkApplyInFlight) return;
+    const ids = peekPendingAddBulk();
+    if (!ids?.length) return;
+
+    pendingAddBulkApplyInFlight = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/me/add-bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ grandparentIds: ids }),
+        });
+        if (!res.ok) {
+          let detail = res.statusText || `HTTP ${res.status}`;
+          try {
+            const j = (await res.json()) as { error?: unknown; detail?: unknown };
+            if (typeof j.error === "string") detail = j.error;
+            else if (typeof j.detail === "string") detail = j.detail;
+          } catch {
+            /* keep detail */
+          }
+          restorePendingAddBulk(ids);
+          toast.error("Couldn't add your artists", { description: detail });
+          return;
+        }
+        clearPendingAddBulk();
+        await queryClient.invalidateQueries({ queryKey: queryKeys.canvas });
+        toast.success("Your picks are on the canvas");
+      } catch (e) {
+        restorePendingAddBulk(ids);
+        toast.error("Couldn't add your artists", {
+          description: e instanceof Error ? e.message : "Network error",
+        });
+      } finally {
+        pendingAddBulkApplyInFlight = false;
+      }
+    })();
+  }, [session.isPending, sessionUserId, queryClient]);
 
   // cmd+f / ctrl+f → open find bar
   useEffect(() => {

@@ -4,6 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { authClient } from "@/lib/auth/client";
+import {
+  markExpectCanvasAfterOAuth,
+  postSignInCanvasUrl,
+} from "@/lib/auth/post-sign-in-url";
 
 const links = [
   { label: "home", href: "/" },
@@ -49,12 +53,13 @@ export function Nav() {
           type="button"
           className="shrink-0 text-sm transition-colors"
           style={{ color: "rgba(255,255,255,0.55)" }}
-          onClick={() =>
+          onClick={() => {
+            markExpectCanvasAfterOAuth();
             void authClient.signIn.social({
               provider: "google",
-              callbackURL: "/canvas",
-            })
-          }
+              callbackURL: postSignInCanvasUrl(),
+            });
+          }}
         >
           login
         </button>

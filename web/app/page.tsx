@@ -6,7 +6,16 @@ import { useRouter } from "next/navigation";
 import { LandingSearchDemo } from "./components/LandingSearchDemo";
 import { Nav } from "./components/Nav";
 import { authClient } from "@/lib/auth/client";
+import {
+  markExpectCanvasAfterOAuth,
+  peekExpectCanvasAfterOAuth,
+  postSignInCanvasUrl,
+} from "@/lib/auth/post-sign-in-url";
 import { formatAddPeople } from "@/lib/format-add-people";
+import {
+  peekPendingAddBulk,
+  setPendingAddBulk,
+} from "@/lib/onboarding/pending-add-bulk";
 import { publicMusApiUrl } from "@/lib/mus/public";
 import { toast } from "sonner";
 
@@ -187,6 +196,14 @@ export default function Home() {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
     return () => clearTimeout(t);
   }, [search]);
+
+  /** OAuth sometimes lands on `/` despite callbackURL; finish onboarding on canvas. */
+  useEffect(() => {
+    if (session.isPending) return;
+    if (!session.data?.user) return;
+    if (!peekPendingAddBulk() && !peekExpectCanvasAfterOAuth()) return;
+    router.replace("/canvas");
+  }, [session.isPending, session.data?.user, router]);
 
   useEffect(() => {
     if (mode === "quickstart") {
@@ -422,7 +439,26 @@ export default function Home() {
   const handleSubmit = async () => {
     if (selected.size === 0) {
       setError("");
+      if (!session.data?.user) {
+        markExpectCanvasAfterOAuth();
+        void authClient.signIn.social({
+          provider: "google",
+          callbackURL: postSignInCanvasUrl(),
+        });
+        return;
+      }
       router.push("/canvas");
+      return;
+    }
+    const grandparentIds = Array.from(selected);
+    if (!session.data?.user) {
+      setError("");
+      setPendingAddBulk(grandparentIds);
+      markExpectCanvasAfterOAuth();
+      void authClient.signIn.social({
+        provider: "google",
+        callbackURL: postSignInCanvasUrl(),
+      });
       return;
     }
     setSubmitting(true);
@@ -431,10 +467,15 @@ export default function Home() {
       const res = await fetch("/api/me/add-bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ grandparentIds: Array.from(selected) }),
+        body: JSON.stringify({ grandparentIds }),
       });
       if (res.status === 401) {
-        router.push("/canvas");
+        setPendingAddBulk(grandparentIds);
+        markExpectCanvasAfterOAuth();
+        void authClient.signIn.social({
+          provider: "google",
+          callbackURL: postSignInCanvasUrl(),
+        });
         return;
       }
       if (!res.ok) throw new Error(await res.text());
@@ -536,11 +577,9 @@ export default function Home() {
             >
               a model
             </a>{" "}
-            capable of embedding audio, video, text, and images.
-          </p>
-          <p>
-            sonica allows you to visualize and search across a library of more than 100k songs in this embedding
+            cap’ble of embedding audio, video, text, and images.             sonica allows you to visualize and search across a library of more than 100k songs in this shared
             space, so you can do things like:
+
           </p>
           <LandingSearchDemo />
           <p>start by choosing up to 5 artists to populate your canvas</p>
@@ -849,6 +888,15 @@ export default function Home() {
           </button>
         </div>
       </div>
+
+      <a
+        href="https://twitter.com/ahamidi_"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="pointer-events-auto absolute bottom-4 right-4 z-20 text-[11px] text-white/45 underline decoration-white/25 underline-offset-2 transition-colors hover:text-white/75 hover:decoration-white/45"
+      >
+        created by alex hamidi
+      </a>
     </div>
   );
 }

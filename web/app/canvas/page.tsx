@@ -173,10 +173,14 @@ export default function CanvasPage() {
     searchTourFromEntityRef.current = null;
     setSearchTour(null);
   }, []);
-  const dismissPlayer = useCallback(() => {
+  /** End tour and hide docked player (X on tour, Escape, sidebar deselect, player close). */
+  const endSearchTourAndClosePlayer = useCallback(() => {
     endSearchTour();
     setCurrentTrack(null);
   }, [endSearchTour]);
+  const dismissPlayer = useCallback(() => {
+    endSearchTourAndClosePlayer();
+  }, [endSearchTourAndClosePlayer]);
   const [projection, setProjection] = useState("umap");
   const [coverMode, setCoverMode] = useState<CoverMode>("album");
   const gridSize = 8000;
@@ -316,8 +320,7 @@ export default function CanvasPage() {
     if (!omniText.trim() && !omniFile) return;
     const userId = session.data?.user?.id;
     if (!userId) return;
-    endSearchTour();
-    setCurrentTrack(null);
+    endSearchTourAndClosePlayer();
     setOmniLoading(true);
     try {
       const form = new FormData();
@@ -338,8 +341,6 @@ export default function CanvasPage() {
         trackIds?: string[];
         sentinelId?: string;
       };
-      setOmniText("");
-      if (omniTextRef.current) omniTextRef.current.style.height = "auto";
       setOmniFile(null);
       await applySearchTourAfterFetch(
         data.trackIds ?? [],
@@ -359,7 +360,6 @@ export default function CanvasPage() {
       const userId = session.data?.user?.id;
       if (!userId || !track.trackId) return;
       endSearchTour();
-      setCurrentTrack(null);
       setOmniLoading(true);
       try {
         const form = new FormData();
@@ -397,8 +397,7 @@ export default function CanvasPage() {
   const submitRecommended = useCallback(async () => {
     const userId = session.data?.user?.id;
     if (!userId || !checkedParentIdsCsv) return;
-    endSearchTour();
-    setCurrentTrack(null);
+    endSearchTourAndClosePlayer();
     setOmniLoading(true);
     try {
       const form = new FormData();
@@ -437,7 +436,7 @@ export default function CanvasPage() {
   }, [
     applySearchTourAfterFetch,
     checkedParentIdsCsv,
-    endSearchTour,
+    endSearchTourAndClosePlayer,
     session.data?.user?.id,
   ]);
 
@@ -943,12 +942,12 @@ export default function CanvasPage() {
         tourNext();
       } else if (e.key === "Escape") {
         e.preventDefault();
-        endSearchTour();
+        endSearchTourAndClosePlayer();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [searchTour, tourPrev, tourNext, endSearchTour]);
+  }, [searchTour, tourPrev, tourNext, endSearchTourAndClosePlayer]);
 
   if (session.isPending || !session.data?.user) {
     return (
@@ -1226,7 +1225,7 @@ export default function CanvasPage() {
                                               searchTourFromEntityRef.current ===
                                                 child.id
                                             ) {
-                                              endSearchTour();
+                                              endSearchTourAndClosePlayer();
                                               return;
                                             }
                                             startSearchTourForEntity(child.id);
@@ -1287,7 +1286,7 @@ export default function CanvasPage() {
                                           >
                                             {notReady
                                               ? "not ready"
-                                              : `${count} songs`}
+                                              : `${count} song${count === 1 ? "" : "s"}`}
                                           </p>
                                         </div>
                                       </button>
@@ -1525,7 +1524,7 @@ export default function CanvasPage() {
                 {searchTour && tourTrack ? (
                   <>
                     <div
-                      className="relative grid h-7 grid-cols-[1fr_auto_1fr] items-center gap-1 px-1.5"
+                      className="relative flex h-7 items-center gap-1 px-1.5"
                       style={{
                         background: "rgb(14,14,18)",
                         border: "1px solid #000",
@@ -1534,9 +1533,11 @@ export default function CanvasPage() {
                         fontFamily: "var(--font-nunito)",
                       }}
                     >
-                      <DockedPlayerCloseButton onClick={dismissPlayer} />
-                      <span aria-hidden className="min-w-0" />
-                      <div className="flex items-center justify-center gap-1">
+                      <span
+                        className="h-6 w-6 shrink-0"
+                        aria-hidden
+                      />
+                      <div className="flex min-w-0 flex-1 items-center justify-center gap-1">
                         <button
                           type="button"
                           onClick={tourPrev}
@@ -1560,16 +1561,14 @@ export default function CanvasPage() {
                           <ChevronRight size={14} strokeWidth={2} />
                         </button>
                       </div>
-                      <div className="flex justify-end">
-                        <button
-                          type="button"
-                          onClick={endSearchTour}
-                          className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-white/45 transition-colors hover:bg-white/5 hover:text-white"
-                          aria-label="Close tour"
-                        >
-                          <X size={13} strokeWidth={2} />
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={endSearchTourAndClosePlayer}
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-white/45 transition-colors hover:bg-white/5 hover:text-white"
+                        aria-label="Close tour"
+                      >
+                        <X size={13} strokeWidth={2} />
+                      </button>
                     </div>
                     <div
                       className="px-4 pt-3 pb-3"

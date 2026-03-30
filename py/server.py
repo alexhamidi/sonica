@@ -635,9 +635,8 @@ def api_artist_neighbors(
 
 
 _SEARCHES_ID = "00000000-0000-0000-0000-000000000001"
-SEARCH_RESULTS_LIMIT = 5
 
-# Track recommendations: nearest-N by embedding to user's mean taste, then top-k by artist popularity.
+# Semantic search paths: nearest-N by embedding, then top-k by artist monthly_listeners (recommended / omnibox / similar).
 TRACK_REC_POOL = 10
 TRACK_REC_K = 5
 
@@ -727,9 +726,8 @@ def _worker_embed_search_track_ids(
     file_bytes: bytes | None,
     mime_type: str,
     text_val: str | None,
-    limit: int,
 ) -> tuple[list[str], list[float]]:
-    """Embedding + vector search in a worker thread (own DB connection)."""
+    """Embedding + vector search: top TRACK_REC_POOL by distance, then top TRACK_REC_K by popularity."""
     if file_bytes:
         emb = embed_query(audio_bytes=file_bytes, mime_type=mime_type or "application/octet-stream")
     else:
@@ -739,14 +737,33 @@ def _worker_embed_search_track_ids(
     try:
         cur = c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
-            """
-            SELECT id
-            FROM tracks
-            WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> %s::halfvec
-            LIMIT %s
-        """,
-            (emb_str, limit),
+            f"""
+            WITH nn AS (
+              SELECT t.id
+              FROM tracks t
+              WHERE t.embedding IS NOT NULL
+                AND t.status = 'ready'
+                AND (t.is_query = false OR t.is_query IS NULL)
+              ORDER BY t.embedding <=> %s::halfvec
+              LIMIT {TRACK_REC_POOL}
+            ),
+            pop AS (
+              SELECT n.id,
+                COALESCE(MAX(gp.monthly_listeners), 0) AS ml
+              FROM nn n
+              LEFT JOIN parent_tracks pt ON pt.track_id = n.id
+              LEFT JOIN parents p ON p.id = pt.parent_id AND p.status = 'ready'
+              LEFT JOIN grandparents gp ON gp.id = p.grandparent_id
+                AND gp.type = 'artist' AND gp.status = 'ready'
+              GROUP BY n.id
+            )
+            SELECT n.id
+            FROM nn n
+            JOIN pop p ON p.id = n.id
+            ORDER BY p.ml DESC NULLS LAST, n.id
+            LIMIT {TRACK_REC_K}
+            """,
+            (emb_str,),
         )
         rows = cur.fetchall()
         return [str(r["id"]) for r in rows], emb
@@ -770,10 +787,11 @@ def _worker_similar_by_track(
     postgres_url: str,
     user_id: str,
     source_track_id: str,
-    limit: int,
 ) -> tuple[list[str], list[float], str]:
     """
-    Nearest tracks by embedding to a source track. Source must belong to the user's library.
+    Nearest tracks by embedding to a source track (pool then popularity, like recommended).
+    Source must belong to the user's library.
+    Results exclude tracks already in the user's library (user_parents + ready parent).
     Returns (similar_track_ids, source_embedding, parent_label). Empty label => not found / no access.
     """
     c, release = _conn_from_pool_or_url(postgres_url)
@@ -814,17 +832,41 @@ def _worker_similar_by_track(
 
         emb_str = "[" + ",".join(f"{v:.8g}" for v in nums) + "]"
         cur.execute(
-            """
-            SELECT id
-            FROM tracks
-            WHERE embedding IS NOT NULL
-              AND id != %s::uuid
-              AND status = 'ready'
-              AND (is_query = false OR is_query IS NULL)
-            ORDER BY embedding <=> %s::halfvec
-            LIMIT %s
+            f"""
+            WITH nn AS (
+              SELECT t.id
+              FROM tracks t
+              WHERE t.embedding IS NOT NULL
+                AND t.id != %s::uuid
+                AND t.status = 'ready'
+                AND (t.is_query = false OR t.is_query IS NULL)
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM parent_tracks pt0
+                  JOIN parents p0 ON p0.id = pt0.parent_id AND p0.status = 'ready'
+                  JOIN user_parents up0 ON up0.parent_id = p0.id AND up0.user_id = %s
+                  WHERE pt0.track_id = t.id
+                )
+              ORDER BY t.embedding <=> %s::halfvec
+              LIMIT {TRACK_REC_POOL}
+            ),
+            pop AS (
+              SELECT n.id,
+                COALESCE(MAX(gp.monthly_listeners), 0) AS ml
+              FROM nn n
+              LEFT JOIN parent_tracks pt ON pt.track_id = n.id
+              LEFT JOIN parents p ON p.id = pt.parent_id AND p.status = 'ready'
+              LEFT JOIN grandparents gp ON gp.id = p.grandparent_id
+                AND gp.type = 'artist' AND gp.status = 'ready'
+              GROUP BY n.id
+            )
+            SELECT n.id
+            FROM nn n
+            JOIN pop p ON p.id = n.id
+            ORDER BY p.ml DESC NULLS LAST, n.id
+            LIMIT {TRACK_REC_K}
             """,
-            (source_track_id, emb_str, limit),
+            (source_track_id, user_id, emb_str),
         )
         rows = cur.fetchall()
         return [str(r["id"]) for r in rows], nums, label
@@ -1053,15 +1095,17 @@ def api_search(
     conn=Depends(get_db),
 ):
     """
-    Semantic search via multimodal embedding + pgvector nearest-neighbor.
-    Accepts text or a file. Returns top-N matching tracks.
+    Semantic search via multimodal embedding + pgvector: nearest TRACK_REC_POOL by
+    distance, then top TRACK_REC_K by artist popularity (same as recommended/similar).
+    Accepts text or a file.
     """
-    if not text and not file:
+    text_stripped = (text or "").strip()
+    if not text_stripped and not file:
         raise HTTPException(status_code=400, detail="Provide text or a file")
 
     file_bytes = file.file.read() if file else None
     mime_type = (file.content_type or "application/octet-stream") if file else ""
-    label = (text.strip()[:80] if text else None) or (
+    label = (text_stripped[:80] if text_stripped else None) or (
         file.filename if file else "search"
     )
     try:
@@ -1069,8 +1113,7 @@ def api_search(
             settings.postgres_url,
             file_bytes,
             mime_type,
-            text,
-            SEARCH_RESULTS_LIMIT,
+            text_stripped if text_stripped else None,
         )
     except Exception as e:
         raise HTTPException(
@@ -1101,8 +1144,8 @@ def api_search_similar(
     conn=Depends(get_db),
 ):
     """
-    Top-N tracks nearest in embedding space to a track in the user's library.
-    Creates a search parent under the searches grandparent (same as /api/search).
+    Similar tracks: nearest TRACK_REC_POOL outside the user's library by embedding,
+    then top TRACK_REC_K by artist popularity. Creates a search parent like /api/search.
     """
     tid = (track_id or "").strip()
     if not tid:
@@ -1113,7 +1156,6 @@ def api_search_similar(
             settings.postgres_url,
             user_id,
             tid,
-            SEARCH_RESULTS_LIMIT,
         )
     except Exception as e:
         raise HTTPException(

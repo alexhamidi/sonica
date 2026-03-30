@@ -58,10 +58,9 @@ function isSearchSourcedTrack(track: Track): boolean {
   return track.sourceQueryKind != null && track.sourceQueryKind !== "";
 }
 
+/** Query/sentinel tiles are for layout + sidebar only — not shown on the map. */
 function skipCanvasTile(track: Track): boolean {
-  return (
-    Boolean(track.isQuery) && track.sourceQueryKind === "recommended"
-  );
+  return Boolean(track.isQuery);
 }
 
 export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(

@@ -185,6 +185,10 @@ export default function Home() {
   const [artists, setArtists] = useState<HomeArtist[]>([]);
   const [artistsLoading, setArtistsLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** Display names for selected ids (survives list refetch / expandSimilar reorder). */
+  const [selectionLabels, setSelectionLabels] = useState<Record<string, string>>(
+    {},
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [trail, setTrail] = useState<TrailCover[]>([]);
@@ -224,7 +228,7 @@ export default function Home() {
         if (cancelled) return;
         let rows = d.artists ?? [];
         if (mode === "search" && !q) {
-          rows = rows.slice(0, 5);
+          rows = rows.slice(0, 10);
         }
         setArtists(
           rows.map((e) => ({ id: e.id, name: e.name, cover: e.cover })),
@@ -246,6 +250,28 @@ export default function Home() {
       cancelled = true;
     };
   }, [mode, debouncedSearch]);
+
+  useEffect(() => {
+    setSelectionLabels((prev) => {
+      const next: Record<string, string> = {};
+      for (const id of selected) {
+        const kept = prev[id]?.trim();
+        if (kept) {
+          next[id] = kept;
+          continue;
+        }
+        const row = artists.find((a) => !a.skeleton && a.id === id);
+        const fromArtist = row?.name?.trim();
+        if (fromArtist) {
+          next[id] = fromArtist;
+          continue;
+        }
+        const ent = resolvedData?.entities.find((e) => e.url === id);
+        if (ent?.name?.trim()) next[id] = ent.name.trim();
+      }
+      return next;
+    });
+  }, [selected, artists, resolvedData]);
 
   useEffect(() => {
     setSelected(new Set());
@@ -508,11 +534,19 @@ export default function Home() {
       return `add ${resolvedData.name}'s picks`;
     }
     const names = Array.from(selected)
-      .map((id) => artists.find((a) => a.id === id && !a.skeleton)?.name)
-      .filter((n): n is string => Boolean(n && n.trim()));
-    if (names.length === 0) return `Add ${selected.size} artists`;
+      .map((id) => selectionLabels[id]?.trim())
+      .filter((n): n is string => Boolean(n));
+    if (names.length === 0) return "Add to canvas";
     return formatAddPeople(names);
-  }, [submitting, profileWaiting, listLoading, selected, artists, mode, resolvedData]);
+  }, [
+    submitting,
+    profileWaiting,
+    listLoading,
+    selected,
+    selectionLabels,
+    mode,
+    resolvedData,
+  ]);
 
   if (session.isPending) {
     return null;
@@ -577,7 +611,7 @@ export default function Home() {
             >
               a model
             </a>{" "}
-            cap’ble of embedding audio, video, text, and images.             sonica allows you to visualize and search across a library of more than 100k songs in this shared
+            capable of embedding audio, video, text, and images.             sonica allows you to visualize and search across a library of more than 100k songs in this shared
             space, so you can do things like:
 
           </p>
